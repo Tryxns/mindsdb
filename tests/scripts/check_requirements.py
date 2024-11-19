@@ -39,7 +39,7 @@ MAIN_EXCLUDE_PATHS = ["mindsdb/integrations/handlers/.*_handler", "pryproject.to
 MAIN_RULE_IGNORES = {
     "DEP003": ["torch"],
     "DEP001": ["torch", "pgvector"],
-    "DEP002": ["psycopg2-binary", "lark", "transformers"]
+    "DEP002": ["psycopg2-binary", "lark", "transformers", "langchain-experimental", "lxml"]
 }
 
 
@@ -88,6 +88,7 @@ PACKAGE_NAME_MAP = {
     "google-cloud-storage": ["google"],
     "protobuf": ["google"],
     "google-api-python-client": ["googleapiclient"],
+    "ibm-cos-sdk": ["ibm_boto3", "ibm_botocore"],
     "binance-connector": ["binance"],
     "pysqlite3": ["pysqlite3"],
     "atlassian-python-api": ["atlassian"],

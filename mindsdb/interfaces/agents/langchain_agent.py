@@ -10,14 +10,10 @@ import pandas as pd
 from langchain.agents import AgentExecutor
 from langchain.agents.initialize import initialize_agent
 from langchain.chains.conversation.memory import ConversationSummaryBufferMemory
-from langchain.schema import SystemMessage
 from langchain_community.chat_models import (
-    ChatAnthropic,
-    ChatOpenAI,
     ChatAnyscale,
     ChatLiteLLM,
-    ChatOllama,
-)
+    ChatOllama)
 from langchain_core.agents import AgentAction, AgentStep
 from langchain_core.embeddings import Embeddings
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
@@ -62,8 +58,11 @@ from .constants import (
     ASSISTANT_COLUMN,
     CONTEXT_COLUMN,
 )
-from mindsdb.interfaces.skills.skill_tool import skill_tool
+from mindsdb.interfaces.skills.skill_tool import skill_tool, SkillData
 from mindsdb.integrations.utilities.rag.settings import DEFAULT_RAG_PROMPT_TEMPLATE
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import SystemMessage
+from langchain_openai import ChatOpenAI
 
 _PARSING_ERROR_PREFIXES = [
     "An output parsing error occurred",
@@ -336,16 +335,11 @@ class LangchainAgent:
 
         return response
 
-    def _get_completion_stream(
-        self, messages: List[dict]
-    ) -> Iterable[Dict]:
-        """
-        Gets a completion as a stream of chunks from given messages.
+    def _get_completion_stream(self, messages: List[dict]) -> Iterable[Dict]:
+        """Gets a completion as a stream of chunks from given messages.
 
         Args:
             messages (List[dict]): Messages to get completion chunks for
-            trace_id (str): Langfuse trace ID to use
-            observation_id (str): Langfuse parent observation Id to use
 
         Returns:
             chunks (Iterable[object]): Completion chunks
@@ -381,9 +375,7 @@ class LangchainAgent:
             self.set_embedding_model(args)
             self.args.pop("mode")
 
-        tools = []
-        skills = self.agent.skills or []
-        tools += self.langchain_tools_from_skills(skills, llm)
+        tools = self._langchain_tools_from_skills(llm)
 
         # Prefer prediction prompt template over original if provided.
         prompt_template = args["prompt_template"]
@@ -432,9 +424,20 @@ class LangchainAgent:
         )
         return agent_executor
 
-    def langchain_tools_from_skills(self, skills, llm):
+    def _langchain_tools_from_skills(self, llm):
         # Makes Langchain compatible tools from a skill
-        tools_groups = skill_tool.get_tools_from_skills(skills, llm, self.embedding_model)
+        skills_data = [
+            SkillData(
+                name=rel.skill.name,
+                type=rel.skill.type,
+                params=rel.skill.params,
+                project_id=rel.skill.project_id,
+                agent_tables_list=(rel.parameters or {}).get('tables')
+            )
+            for rel in self.agent.skills_relationships
+        ]
+
+        tools_groups = skill_tool.get_tools_from_skills(skills_data, llm, self.embedding_model)
 
         all_tools = []
         for skill_type, tools in tools_groups.items():
@@ -543,7 +546,7 @@ AI: {response}"""
 
     def run_agent(self, df: pd.DataFrame, agent: AgentExecutor, args: Dict) -> pd.DataFrame:
         base_template = args.get('prompt_template', args['prompt_template'])
-        return_context = args.get('return_context', False)
+        return_context = args.get('return_context', True)
         input_variables = re.findall(r"{{(.*?)}}", base_template)
 
         prompts, empty_prompt_ids = prepare_prompts(df, base_template, input_variables, args.get('user_column', USER_COLUMN))
@@ -614,7 +617,7 @@ AI: {response}"""
     def stream_agent(self, df: pd.DataFrame, agent_executor: AgentExecutor, args: Dict) -> Iterable[Dict]:
         base_template = args.get('prompt_template', args['prompt_template'])
         input_variables = re.findall(r"{{(.*?)}}", base_template)
-        return_context = args.get('return_context', False)
+        return_context = args.get('return_context', True)
 
         prompts, _ = prepare_prompts(df, base_template, input_variables, args.get('user_column', USER_COLUMN))
 
@@ -631,7 +634,10 @@ AI: {response}"""
             raise TypeError("The stream method did not return an iterable")
 
         for chunk in stream_iterator:
-            yield self.process_chunk(chunk)
+            logger.info(f'Processing streaming chunk {chunk}')
+            processed_chunk = self.process_chunk(chunk)
+            logger.info(f'Processed chunk: {processed_chunk}')
+            yield processed_chunk
 
         if return_context:
             # Yield context if required
@@ -669,7 +675,9 @@ AI: {response}"""
             }
         if issubclass(chunk.__class__, BaseMessage):
             # Extract content from message subclasses properly for streaming.
-            return chunk.content
+            return {
+                'content': chunk.content
+            }
         if isinstance(chunk, (str, int, float, bool, type(None))):
             return chunk
         return str(chunk)
